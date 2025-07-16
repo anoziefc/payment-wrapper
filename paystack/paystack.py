@@ -1,13 +1,11 @@
 import asyncio
 import httpx
 import os
-from datetime import datetime
 from dotenv import load_dotenv
 from logger.logger import get_logger
 from paystack.errors import TransactionError
 from paystack.models import *
-from pydantic import BaseModel, Field, EmailStr, HttpUrl
-from typing import Dict, List, Optional, Annotated, Any
+from typing import Dict, Union
 
 
 load_dotenv()
@@ -63,7 +61,8 @@ class PayStackIntegration():
         authorization = f"Bearer {self.__secret_key}"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": authorization
+            "Authorization": authorization,
+            "Cache-Control": "no-cache"
         }
 
         try:
@@ -169,6 +168,7 @@ class PayStackIntegration():
     def charge_authorization(self, payload: ChargeAuthorizationPayloadModel) -> ChargeAuthorizationResponseModel:
         path = "/transaction/charge_authorization"
         data = payload.model_dump()
+        print(data)
 
         try:
             resp = self._post_request(data, path)
@@ -191,6 +191,25 @@ class PayStackIntegration():
                     "message": f"{resp.get("message", "")}"
                 }
             )
+    
+    def view_transaction_timeline(self, id_or_ref: Union[str, int]) -> Dict:
+        path = f"/transaction/timeline/{id_or_ref}"
+
+        try:
+            resp = self._get_request(path)
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            raise
+        
+        if resp.get("message") == "Timeline retrieved":
+            logger.info(f"Transaction Timeline retrieved successfully")
+            return resp
+        else:
+            logger.warning(f"Card initiation failed: {resp}")
+            raise ValueError("Payment initiation failed")
 
 
 if __name__ == "__main__":
@@ -200,17 +219,19 @@ if __name__ == "__main__":
         # print(all_transactions.model_dump_json())
         # transaction = paystack.fetch_transaction(5146531433)
         # print(transaction.model_dump_json())
-        payload = ChargeAuthorizationPayloadModel(
-            amount="200",
-            email="cfanozie@gmail.com",
-            authorization_code="AUTH_72btv547"
-        )
-        charge = paystack.charge_authorization(payload=payload)
-        print(charge)
+        # payload = ChargeAuthorizationPayloadModel(
+        #     amount="1000",
+        #     email="cfanozie@gmail.com",
+        #     authorization_code="AUTH_nx33vsiz4q"
+        # )
+        # charge = paystack.charge_authorization(payload=payload)
+        # print(charge)
+        time_line = paystack.view_transaction_timeline(5152751671)
+        print(time_line)
         # transaction = TransactionsInitPayloadModel(
         #     amount="1000",
         #     email="cfanozie@gmail.com",
-        #     channels=["bank", "ussd", "bank_transfer"]
+        #     channels=["card", "bank", "ussd", "bank_transfer"]
         # )
         # try:
         #     init_transaction = paystack.initalize_transaction(transaction)
@@ -218,6 +239,6 @@ if __name__ == "__main__":
         #     print(init_transaction)
         # except Exception as e:
         #     print(f"Error: {e}")
-        # reference_num = init_transaction["data"]["reference"]
+        # reference_num = "87ui7tjf5t"
         # transaction_status = paystack.verify_transaction(reference_num)
         # print(transaction_status.model_dump_json())
