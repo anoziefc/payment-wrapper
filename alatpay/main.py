@@ -96,11 +96,11 @@ class AccountGenerationPayloadModel(BaseModel):
 
 class AlatPayIntegration():
 
-    def __init__(self):
+    def __init__(self, client: httpx.Client = None):
         self.__subscription_key = os.getenv("ALAT_PAY_PRIMARY_KEY")
         self.__business_id = os.getenv("ALAT_PAY_BUSINESS_ID")
         self.__base_url = os.getenv("ALAT_PAY_BASE_URL_DEV")
-        self.__client = httpx.Client()
+        self.__client = client or httpx.Client()
 
         if not all([self.__subscription_key, self.__business_id, self.__base_url]):
             logger.error("Missing required environment variables for AlatPayIntegration.")
@@ -140,7 +140,7 @@ class AlatPayIntegration():
 
     def initiate_card_payment(self, payload: InitPayloadModel) -> InitResponseModel:
         path = "/paymentcard/api/v1/paymentCard/mc/initialize"
-        data = TypeAdapter(InitPayloadModel).dump_python(payload)
+        data = InitPayloadModel.model_validate(payload).model_dump()
         data["businessId"] = self.__business_id
 
         try:
@@ -181,7 +181,7 @@ class AlatPayIntegration():
                 code=403,
                 context={
                     "gatewayRecommendation": f"{data.get("gatewayRecommendation", "")}",
-                    "transactionID": f"{data.get("transactionID", "")}"
+                    "transactionID": data.get("transactionID", "")
                 }
             )
         
