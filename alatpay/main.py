@@ -1,15 +1,12 @@
 import asyncio
 import httpx
 import os
-from alatpay.exceptions import AlatError
+from alatpay.exceptions import AlatException
 from alatpay.models import *
 from alatpay.card_transaction import CardPayment, BankTransfer
 from dotenv import load_dotenv
 from logger.logger import get_logger
 from typing import Dict
-from datetime import datetime, timezone, timedelta
-from dateutil import parser
-import time
 
 
 load_dotenv()
@@ -41,9 +38,8 @@ class AlatPayIntegration():
         self.__client.close()
 
     def _get_request(self, path: str, params: Dict = None) -> Dict:
-        authorization = f"Bearer {self.__secret_key}"
         headers = {
-            "Authorization": authorization,
+            "Ocp-Apim-Subscription-Key": self.__subscription_key,
             "Cache-Control": "no-cache"
         }
 
@@ -81,7 +77,7 @@ class AlatPayIntegration():
         except httpx.HTTPStatusError as e:
             context = e.response.json()
             logger.error(f"HTTP {e.response.status_code} Error: {e.response.json()["message"]}")
-            raise AlatError(
+            raise AlatException(
                 message=context["message"],
                 code=e.response.status_code,
                 context=context
@@ -94,46 +90,17 @@ class AlatPayIntegration():
         return resp_data
 
     @property
-    def card_transactions(self, payload: UserDataModel) -> AuthResponseModel:
+    def card_transactions(self) -> AuthResponseModel:
         if self.__card_transactions is None:
-            card_payment = CardPayment(self._post_request)
-            init_payload = InitPayloadModel(
-                cardNumber=payload.cardNumber,
-                currency=payload.currency
-            )
-            initiate_card_payment = card_payment.initiate_card_payment(init_payload)
-            self.__card_transactions = card_payment.authenticate_card(payload, initiate_card_payment)
+            self.__card_transactions = CardPayment(self._post_request, self.__business_id)
         return self.__card_transactions
 
     @property
-    def bank_transfers(self, payload: AccountGenerationPayloadModel):
+    def bank_transfer(self):
         if self.__bank_transfer is None:
-            bank_transfer = BankTransfer(self._post_request, self._get_request)
-            generate_virual_account = bank_transfer.generate_virtual_account(payload)
-            try:
-                start_time = parser.isoparse(
-                    generate_virual_account.data.createdAt
-                ).astimezone(timezone.utc)
-                valid_for_minutes: int = 30
-                transaction_id = generate_virual_account.data.transactionId
-            except Exception as e:
-                raise ValueError(f"Invalid start time format: {e}")
-
-            expiry_time = start_time + timedelta(minutes=valid_for_minutes)
-
-            while datetime.now(timezone.utc) < expiry_time:
-                try:
-                    print("Waiting for transaction")
-                    self.__bank_transfer = bank_transfer.confirm_transaction_status(transaction_id)
-                    status = self.__bank_transfer.get('status')
-
-                    if status == 'SUCCESS':
-                        print("Transaction completed successfully.")
-                        return self.__bank_transfer
-                    elif status == 'FAILED':
-                        raise Exception("Transaction failed.")
-                except Exception as e:
-                    print(f"Error while checking transaction: {e}")
-
-                time.sleep(3)
-            return "Transaction Timeout"
+            self.__bank_transfer = BankTransfer(
+                self._post_request,
+                self._get_request,
+                self.__business_id
+            )
+        return self.__bank_transfer

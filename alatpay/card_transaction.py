@@ -20,9 +20,11 @@ logger = get_logger(__name__)
 class CardPayment():
 
     def __init__(self,
-            post_request: Callable[[Dict, str], Dict]
+            post_request: Callable[[Dict, str], Dict],
+            business_id: str
         ):
         self._post_request = post_request
+        self.__business_id = business_id
 
     def initiate_card_payment(self, payload: InitPayloadModel) -> InitResponseModel:
         path = "/paymentCard/api/v1/paymentCard/mc/initialize"
@@ -75,10 +77,12 @@ class BankTransfer():
 
     def __init__(self,
             post_request: Callable[[Dict, str], Dict],
-            get_request: Callable[[str, Optional[Dict]], Dict]
+            get_request: Callable[[str, Optional[Dict]], Dict],
+            business_id: str
         ):
         self._post_request = post_request
         self.__get_request = get_request
+        self.__business_id = business_id
 
     def generate_virtual_account(self, payload: AccountGenerationPayloadModel) -> AccountGenerationResponseModel:
         path = "/bank-transfer/api/v1/bankTransfer/virtualAccount"
@@ -86,10 +90,10 @@ class BankTransfer():
         data["businessId"] = self.__business_id
 
         resp = self._post_request(data, path)
-        
+
         assert_success(
             resp,
-            expected_message="Success",
+            expected_message="Business fetched locally",
             error_message="Failed to create virtual account",
             error_code=400
         )

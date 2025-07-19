@@ -1,5 +1,5 @@
-from datetime import datetime
-from pydantic import BaseModel, Field, EmailStr, Optional
+from pydantic import BaseModel, Field, EmailStr
+from typing import Optional
 
 
 class InitPayloadModel(BaseModel):
@@ -50,21 +50,21 @@ class AuthResponseModel(BaseModel):
 class AccountDetailsModel(BaseModel):
     businessId: str = Field(..., min_length=5)
     amount: float
-    currency: str = Field(..., min_length=5)
+    currency: str = Field(..., pattern="^[A-Z]{3}$")
     orderId: str = Field(..., min_length=5)
     description: str = Field(..., min_length=5)
     customer: CustomerModel
     id: str = Field(..., min_length=5)
     merchantId: str = Field(..., min_length=5)
-    virtualBankCode: str = Field(..., min_length=5)
-    virtualBankAccountNumber: str = Field(..., min_length=5)
-    businessBankAccountNumber: str = Field(..., min_length=5)
-    businessBankCode: str = Field(..., min_length=5)
+    virtualBankCode: str = Field(..., min_length=3)
+    virtualBankAccountNumber: Optional[str] = Field(None, min_length=10)
+    businessBankAccountNumber: Optional[str] = Field(None, min_length=10)
+    businessBankCode: Optional[str] = Field(None, min_length=5)
     transactionId: str = Field(..., min_length=5)
-    status: str = Field(..., min_length=5)
-    expiredAt: Optional[datetime]
-    settlementType: str = Field(..., min_length=5)
-    createdAt: Optional[datetime]
+    status: Optional[str] = Field(None, min_length=3)
+    expiredAt: Optional[str]
+    settlementType: Optional[str] = Field(None, min_length=5)
+    createdAt: Optional[str]
 
 
 class AccountGenerationResponseModel(BaseModel):
