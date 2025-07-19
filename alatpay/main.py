@@ -1,97 +1,19 @@
 import asyncio
 import httpx
 import os
-from alatpay.errors import CardError
-from datetime import datetime
+from alatpay.exceptions import AlatError
+from alatpay.models import *
+from alatpay.card_transaction import CardPayment, BankTransfer
 from dotenv import load_dotenv
 from logger.logger import get_logger
-from pydantic import BaseModel, TypeAdapter, Field, EmailStr
-from pydantic.dataclasses import dataclass
 from typing import Dict
+from datetime import datetime, timezone, timedelta
+from dateutil import parser
+import time
 
 
 load_dotenv()
 logger = get_logger(__name__) 
-
-
-@dataclass
-class InitPayloadModel:
-    cardNumber: str = Field(..., min_length=10)
-    currency: str = Field(..., pattern="^[A-Z]{3}$")
-
-
-class InitResponseModel(BaseModel):
-    status: bool
-    message: str
-    gatewayRecommendation: str = Field(..., min_length=3)
-    transactionId: str = Field(..., min_length=5)
-    orderId: str = Field(..., min_length=5)
-
-
-class CustomerModel(BaseModel):
-    email: EmailStr
-    phone: str = Field(..., min_length=11, max_length=14)
-    firstName: str = Field(..., min_length=1)
-    lastName: str = Field(..., min_length=1)
-    metadata: str = Field(..., min_length=1)
-
-
-class UserDataModel(BaseModel):
-    cardNumber: str = Field(..., min_length=10, max_length=19)
-    cardMonth: str = Field(..., min_length=1, max_length=2)
-    cardYear: str = Field(..., min_length=2, max_length=4)
-    securityCode: str = Field(..., min_length=3, max_length=4)
-    businessName: str = Field(..., min_length=1)
-    amount: str = Field(..., min_length=2)
-    currency: str = Field(..., pattern="^[A-Z]{3}$")
-    orderId: str = Field(..., min_length=5)
-    description: str = Field(..., min_length=1)
-    channel: str = Field(..., min_length=3)
-    transactionId: str = Field(..., min_length=5)
-    customer: CustomerModel
-
-
-class AuthResponseModel(BaseModel):
-    status: bool
-    message: str = Field(..., min_length=5)
-    redirectHtml: str = Field(..., min_length=5)
-    gatewayRecommendation: str = Field(..., min_length=5)
-    transactionId: str = Field(..., min_length=5)
-    orderId: str = Field(..., min_length=5)
-
-
-class AccountDetailsModel(BaseModel):
-    businessId: str = Field(..., min_length=5)
-    amount: float
-    currency: str = Field(..., min_length=5)
-    orderId: str = Field(..., min_length=5)
-    description: str = Field(..., min_length=5)
-    customer: CustomerModel
-    id: str = Field(..., min_length=5)
-    merchantId: str = Field(..., min_length=5)
-    virtualBankCode: str = Field(..., min_length=5)
-    virtualBankAccountNumber: str = Field(..., min_length=5)
-    businessBankAccountNumber: str = Field(..., min_length=5)
-    businessBankCode: str = Field(..., min_length=5)
-    transactionId: str = Field(..., min_length=5)
-    status: str = Field(..., min_length=5)
-    expiredAt: datetime
-    settlementType: str = Field(..., min_length=5)
-    createdAt: datetime
-
-
-class AccountGenerationResponseModel(BaseModel):
-    status: bool
-    message: str = Field(..., min_length=5)
-    data: AccountDetailsModel
-
-
-class AccountGenerationPayloadModel(BaseModel):
-    amount: float
-    currency: str = Field(..., pattern="^[A-Z]{3}$")
-    orderId: str = Field(..., min_length=5)
-    description: str = Field(..., min_length=5)
-    customer: CustomerModel
 
 
 class AlatPayIntegration():
@@ -99,8 +21,11 @@ class AlatPayIntegration():
     def __init__(self, client: httpx.Client = None):
         self.__subscription_key = os.getenv("ALAT_PAY_PRIMARY_KEY")
         self.__business_id = os.getenv("ALAT_PAY_BUSINESS_ID")
-        self.__base_url = os.getenv("ALAT_PAY_BASE_URL_DEV")
+        self.__base_url = os.getenv("ALAT_PAY_BASE_URL")
         self.__client = client or httpx.Client()
+
+        self.__card_transactions = None
+        self.__bank_transfer = None
 
         if not all([self.__subscription_key, self.__business_id, self.__base_url]):
             logger.error("Missing required environment variables for AlatPayIntegration.")
@@ -115,10 +40,35 @@ class AlatPayIntegration():
     def close(self):
         self.__client.close()
 
+    def _get_request(self, path: str, params: Dict = None) -> Dict:
+        authorization = f"Bearer {self.__secret_key}"
+        headers = {
+            "Authorization": authorization,
+            "Cache-Control": "no-cache"
+        }
+
+        try:
+            resp = self.__client.get(
+                url=f"{self.__base_url}{path}",
+                headers=headers,
+                params=params if params else None
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            raise
+        
+        retVal = resp.json()
+        return retVal
+
     def _post_request(self, payload: Dict, path: str) -> Dict:
         headers = {
             "Content-Type": "application/json",
-            "Ocp-Apim-Subscription-Key": self.__subscription_key
+            "Ocp-Apim-Subscription-Key": self.__subscription_key,
+            "Cache-Control": "no-cache"
         }
 
         try:
@@ -129,8 +79,13 @@ class AlatPayIntegration():
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
-            raise
+            context = e.response.json()
+            logger.error(f"HTTP {e.response.status_code} Error: {e.response.json()["message"]}")
+            raise AlatError(
+                message=context["message"],
+                code=e.response.status_code,
+                context=context
+            )
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
             raise
@@ -138,111 +93,47 @@ class AlatPayIntegration():
         resp_data = resp.json()
         return resp_data
 
-    def initiate_card_payment(self, payload: InitPayloadModel) -> InitResponseModel:
-        path = "/paymentcard/api/v1/paymentCard/mc/initialize"
-        data = InitPayloadModel.model_validate(payload).model_dump()
-        data["businessId"] = self.__business_id
-
-        try:
-            resp = self._post_request(data, path)
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
-            raise
-        
-        if resp.get("message") == "Success":
-            logger.info(f"Card initiation success — transactionId: {resp['data']['transactionId']}")
-            return InitResponseModel(**resp)
-        else:
-            logger.warning(f"Card initiation failed: {resp}")
-            raise ValueError("Payment initiation failed")
-
-    def authenticate_card(self, userData: UserDataModel, payload: InitResponseModel) -> AuthResponseModel:
-        path = "/paymentcard/api/v1/paymentCard/mc/authenticate"
-        data = payload.model_dump()
-
-        if data.get("gatewayRecommendation", "") == "PROCEED":
-            try:
-                send_data = userData.model_dump()
-                send_data["businessId"] = self.__business_id
-                resp = self._post_request(send_data, path)
-            except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
-                raise
-            except Exception as e:
-                logger.error(f"Unexpected error: {str(e)}")
-                raise
-        else:
-            logger.warning(f"Card initiation failed")
-            raise CardError(
-                message="This card does not meet the required security validations, and so this card cannot not be used to perform this transaction at this time.",
-                code=403,
-                context={
-                    "gatewayRecommendation": f"{data.get("gatewayRecommendation", "")}",
-                    "transactionID": data.get("transactionID", "")
-                }
+    @property
+    def card_transactions(self, payload: UserDataModel) -> AuthResponseModel:
+        if self.__card_transactions is None:
+            card_payment = CardPayment(self._post_request)
+            init_payload = InitPayloadModel(
+                cardNumber=payload.cardNumber,
+                currency=payload.currency
             )
-        
-        if resp.get("message") == "Success":
-            logger.info(f"Card initiation success — transactionId: {resp['data']['transactionId']}")
-            return AuthResponseModel(**resp)
-        else:
-            logger.warning(f"Card initiation failed: {resp}")
-            raise ValueError("Payment initiation failed")
+            initiate_card_payment = card_payment.initiate_card_payment(init_payload)
+            self.__card_transactions = card_payment.authenticate_card(payload, initiate_card_payment)
+        return self.__card_transactions
 
-    def generate_virtual_account(self, payload: AccountGenerationPayloadModel) -> AccountGenerationResponseModel:
-        path = "/bank-transfer/api/v1/bankTransfer/virtualAccount"
-        data = payload.model_dump()
-        data["businessId"] = self.__business_id
-        
-        try:
-            resp = self._post_request(data, path)
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
-            raise
-        
-        if resp.get("message") == "Success":
-            logger.info(f"Virtual Account Generation Success — transactionId: {resp['data']['transactionId']}")
-            return AccountGenerationResponseModel(**resp)
-        else:
-            logger.warning(f"Card initiation failed: {resp}")
-            raise ValueError("Payment initiation failed")
+    @property
+    def bank_transfers(self, payload: AccountGenerationPayloadModel):
+        if self.__bank_transfer is None:
+            bank_transfer = BankTransfer(self._post_request, self._get_request)
+            generate_virual_account = bank_transfer.generate_virtual_account(payload)
+            try:
+                start_time = parser.isoparse(
+                    generate_virual_account.data.createdAt
+                ).astimezone(timezone.utc)
+                valid_for_minutes: int = 30
+                transaction_id = generate_virual_account.data.transactionId
+            except Exception as e:
+                raise ValueError(f"Invalid start time format: {e}")
 
-    def transactions(self):
-        pass
+            expiry_time = start_time + timedelta(minutes=valid_for_minutes)
 
-def main():
-    pass
+            while datetime.now(timezone.utc) < expiry_time:
+                try:
+                    print("Waiting for transaction")
+                    self.__bank_transfer = bank_transfer.confirm_transaction_status(transaction_id)
+                    status = self.__bank_transfer.get('status')
 
-# Bank Transfer URL: BaseURL/bank-transfer/
-# Bank Account URL: BaseURL/alatpayaccountnumber/
-# Card URL: BaseURL/paymentcard/
+                    if status == 'SUCCESS':
+                        print("Transaction completed successfully.")
+                        return self.__bank_transfer
+                    elif status == 'FAILED':
+                        raise Exception("Transaction failed.")
+                except Exception as e:
+                    print(f"Error while checking transaction: {e}")
 
-if __name__ == "__main__":
-    with AlatPayIntegration() as alat:
-        account_request_payload = AccountGenerationPayloadModel(
-            amount=0,
-            currency="NGN",
-            orderId="3fa85f64-5717-4562-b3fc-2c963f66afa6",
-            description="Testing Account Generation",
-            customer={
-                "email": "cfanozie@gmail.com",
-                "phone": "08101391054",
-                "firstName": "Franklin",
-                "lastName": "Anozie",
-                "metadata": "Payer"
-            }
-        )
-        try:
-            account_generated = alat.generate_virtual_account(account_request_payload)
-            print(account_generated)
-        except Exception as e:
-            print(f"Error: {e}")
-
-# Transaction ID: 999cf73f-4b3c-4161-ae1c-4cf2f17da45e
-# Merchant ID: 1ea91ec2-851e-47f1-ac6a-08dcd7e5dac5
+                time.sleep(3)
+            return "Transaction Timeout"

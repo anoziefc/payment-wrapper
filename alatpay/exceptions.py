@@ -4,8 +4,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class CardError(Exception):
-    def __init__(self, message: str = "Card validation failed", code: int = None, context: dict = None):
+class AlatException(Exception):
+    def __init__(self, message: str, code: int, context: dict = None):
         self.code = code
         self.context = context or {}
 
@@ -15,7 +15,7 @@ class CardError(Exception):
         if code:
             full_message += f" (Error code: {code})"
 
-        logger.error(f"CardError raised: {full_message} | Context: {masked_context}")
+        logger.error(f"AlatException raised: {full_message} | Context: {masked_context}")
         super().__init__(full_message)
 
     def _mask_value(self, value):

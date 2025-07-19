@@ -50,7 +50,7 @@ class TransactionsInitPayloadModel(BaseModel):
 class TransactionInitResponseDataModel(BaseModel):
     authorization_url: HttpUrl
     access_code: str
-    reference: str
+    reference: Optional[ReferenceStr] = None
 
 
 class TransactionsInitResponseModel(BaseModel):
@@ -118,7 +118,7 @@ class TransactionVerifyData(BaseModel):
     id: int
     domain: str
     status: str
-    reference: str
+    reference: Optional[ReferenceStr] = None
     receipt_number: Optional[str]
     amount: int
     message: Optional[str]
@@ -126,7 +126,7 @@ class TransactionVerifyData(BaseModel):
     paid_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     channel: str
-    currency: str
+    currency: str = Field(None, description="Transaction currency (defaults to integration currency)")
     ip_address: str
     metadata: Optional[Any]
     log: Optional[Log]
@@ -153,14 +153,14 @@ class ListTransactionsDataModel(BaseModel):
     id: int
     domain: str
     status: str
-    reference: str
+    reference: Optional[ReferenceStr] = None
     amount: int
     message: Optional[str]
     gateway_response: str
     paid_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     channel: str
-    currency: str
+    currency: str = Field(None, description="Transaction currency (defaults to integration currency)")
     ip_address: str
     metadata: Optional[Any]
     log: Optional[Log]
@@ -237,10 +237,10 @@ class ChargeAuthorizationPayloadModel(BaseModel):
 class ChargeData(BaseModel):
     id: int
     amount: int
-    currency: str
+    currency: str = Field(None, description="Transaction currency (defaults to integration currency)")
     transaction_date: Optional[datetime] = None
     status: str
-    reference: str
+    reference: Optional[ReferenceStr] = None
     domain: str
     metadata: Optional[Any] = None
     gateway_response: str
@@ -258,3 +258,69 @@ class ChargeAuthorizationResponseModel(BaseModel):
     status: bool
     message: str
     data: ChargeData
+
+
+class ByCurrency(BaseModel):
+    currency: Optional[str] = Field(None, description="Transaction currency (defaults to integration currency)")
+    amount: int
+
+
+class TransactionsTotalData(BaseModel):
+    total_transactions: int
+    total_volume: int
+    total_volume_by_currency: List[ByCurrency]
+    pending_transfers: int
+    pending_transfers_by_currency: List[ByCurrency]
+
+
+class TransactionsTotalResponseModel(BaseModel):
+    status: bool
+    message: str
+    data: TransactionsTotalData
+
+
+class ExportTransactionsData(BaseModel):
+    path: Optional[HttpUrl] = Field(None, description="URL for Transactions Download")
+    expiresAt: Optional[datetime] = None
+
+
+class ExportTransactionsResponseModel(BaseModel):
+    status: bool
+    message: str
+    data: ExportTransactionsData
+
+
+class PartialDebitPayload(BaseModel):
+    authorization_code: str = Field(..., description="Authorization Code")
+    currency: str = Field(..., pattern="^[A-Z]{3}$", description="Allowed values: NGN or GHS")
+    amount: str = Field(..., description="Amount in subunit of the currency, digits only")
+    email: EmailStr = Field(..., description="Customer's email address tied to the authorization")
+    reference: Optional[ReferenceStr] = Field(None, description="Alphanumeric, dash (-), dot (.), or equal (=)")
+    at_least: Optional[str] = Field(None, description="Minimum amount to charge (subunit)")
+
+
+class PartialDebitChargeData(BaseModel):
+    id: Optional[int] = None
+    amount: Optional[int] = None
+    currency: str = Field(None, description="Transaction currency (defaults to integration currency)")
+    transaction_date: Optional[datetime] = None
+    status: Optional[str] = None
+    reference: Optional[ReferenceStr] = None
+    domain: Optional[str] = None
+    metadata: Optional[str] = None
+    gateway_response: str
+    message: Optional[str] = None
+    channel: Optional[str] = None
+    ip_address: Optional[str] = None
+    log: Optional[str] = None
+    fees: Optional[int] = None
+    authorization: Optional[AuthorizationData] = None
+    customer: Optional[CustomerData] = None
+    plan: Optional[int] = None
+    requested_amount: Optional[int] = None
+
+
+class PartialDebitResponseModel(BaseModel):
+    status: bool
+    message: str
+    data: PartialDebitChargeData
